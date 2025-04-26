@@ -1,0 +1,4 @@
+# Solana wallet addresses for balance checking
+# One address per line, empty lines and lines starting with # are ignored
+
+# Add your wallet addresses below 

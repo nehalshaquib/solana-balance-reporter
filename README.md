@@ -118,6 +118,26 @@ go build -o solana-balance-reporter ./cmd
 
 Simply add new wallet addresses to the `addresses.txt` file. The application reloads the file before each run, so no restart is required.
 
+## Troubleshooting
+
+### Email Sending Issues
+
+If you're experiencing issues with email sending:
+
+1. Check your SMTP credentials carefully
+2. Verify that your Amazon SES account is out of the sandbox (if using SES)
+3. Confirm that the sender email is verified in SES
+4. Check port 587 isn't blocked by your firewall
+5. Look for specific errors in the log files in the `/logs` directory
+6. Try using the `SMTP_PORT=465` for direct SSL connection instead of StartTLS
+
+### Failed Address Fetches
+
+For addresses that fail to fetch:
+- The CSV report will show "N/A" in the balance column instead of 0
+- Check the logs for the specific error message for each address
+- The application will attempt to retry fetches up to the configured MAX_RETRIES limit
+
 ## License
 
 MIT License 

@@ -33,6 +33,13 @@ func main() {
 
 	log.Log("Solana Balance Reporter started")
 
+	// Log configuration details (but mask sensitive info)
+	log.Log(fmt.Sprintf("Configuration loaded - RPC URL: %s, Token Mint: %s, Email From: %s",
+		maskString(cfg.SolanaRPCURL), cfg.TokenMintAddress, cfg.EmailFrom))
+	log.Log(fmt.Sprintf("SMTP configured - Server: %s, Port: %d", cfg.SMTPServer, cfg.SMTPPort))
+	log.Log(fmt.Sprintf("Performance settings - Timeout: %v, Max Retries: %d, Concurrency: %d",
+		cfg.RPCTimeout, cfg.MaxRetries, cfg.ConcurrencyLimit))
+
 	// Initialize components
 	addressReader := reader.New(cfg.AddressesFilePath, log)
 	solanaClient := solana.New(cfg.SolanaRPCURL, cfg.TokenMintAddress, cfg.RPCTimeout, cfg.MaxRetries, log)
@@ -73,6 +80,16 @@ func main() {
 			return
 		}
 	}
+}
+
+// maskString masks sensitive data like API keys and tokens
+func maskString(input string) string {
+	if len(input) <= 10 {
+		return "***"
+	}
+
+	// Keep the first 10 characters, mask the rest
+	return input[:10] + "***"
 }
 
 // runFetchAndReport fetches balances and sends a report
