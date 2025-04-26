@@ -42,6 +42,21 @@ func (l *Logger) rotateLogFile() error {
 	// Create filename based on current time with seconds precision
 	now := time.Now().UTC()
 	filename := fmt.Sprintf("activity_%s.log", now.Format("2006-01-02_15_04_05"))
+	return l.openLogFile(filename)
+}
+
+// SetFilename sets a specific log filename and opens that file
+func (l *Logger) SetFilename(filename string) error {
+	// Close existing file if open
+	if l.file != nil {
+		l.file.Close()
+	}
+
+	return l.openLogFile(filename)
+}
+
+// openLogFile opens the specified log file
+func (l *Logger) openLogFile(filename string) error {
 	filepath := filepath.Join(l.logDir, filename)
 
 	// Open or create the log file
