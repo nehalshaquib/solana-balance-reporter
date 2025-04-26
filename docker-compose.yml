@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  solana-balance-reporter:
+    build: .
+    container_name: solana-balance-reporter
+    restart: always
+    volumes:
+      - ./csv:/app/csv
+      - ./logs:/app/logs
+      - ./.env:/app/.env
+      - ./addresses.txt:/app/addresses.txt
+    environment:
+      TZ: UTC
+    networks:
+      - solana-network
+
+networks:
+  solana-network:
+    driver: bridge 

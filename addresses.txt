@@ -1,0 +1,9 @@
+# Solana wallet addresses for balance checking
+# One address per line, empty lines and lines starting with # are ignored
+
+# Example addresses (these are just examples, replace with real addresses)
+9gFpVBNdJ2vP5vRGfvGSKvSD5htnRZM27Z2zHQ36JQTx
+CuieVDEDtLo7FypA9SbLM9saXFdb1dsshEkyErMqkRQq
+3bTGcRbJJWZhrrqCRwChr5wBrpCfLyZjvzel5iZTRGAb
+
+# Add your wallet addresses below 
