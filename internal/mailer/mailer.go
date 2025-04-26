@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nehalshaquib/solana-balance-reporter/internal/logger"
+	"github.com/nehalshaquib/solana-balance-reporter/internal/solana"
 )
 
 // Mailer handles sending emails with CSV attachments
@@ -43,7 +44,7 @@ func New(smtpServer string, smtpPort int, smtpUsername, smtpPassword, emailFrom 
 }
 
 // SendReport sends an email with the CSV report attached
-func (m *Mailer) SendReport(csvFilePath string) error {
+func (m *Mailer) SendReport(csvFilePath string, balances []*solana.TokenBalance) error {
 	if len(m.emailTo) == 0 {
 		return fmt.Errorf("no recipients configured")
 	}
@@ -72,6 +73,19 @@ func (m *Mailer) SendReport(csvFilePath string) error {
 	hourStr := t.Format("15:00")
 	nextHourStr := t.Add(time.Hour).Format("15:00")
 
+	// Count successful and failed fetches
+	totalAddresses := len(balances)
+	successCount := 0
+	failedCount := 0
+
+	for _, balance := range balances {
+		if balance.FetchError == nil {
+			successCount++
+		} else {
+			failedCount++
+		}
+	}
+
 	// Format subject and body
 	subject := fmt.Sprintf("Token Balance Report for %s, %s - %s UTC", dateStr, hourStr, nextHourStr)
 	body := fmt.Sprintf(`Hello,
@@ -80,11 +94,17 @@ Attached is the token balance report for %s, %s - %s UTC.
 
 This report contains wallet addresses and their JINGLE token balances.
 
+Summary:
+- Total addresses processed: %d
+- Successfully fetched: %d
+- Failed to fetch: %d
+- Failed addresses are marked as "N/A" in the balance column
+
 This report was generated at exactly: %s
 
 Best regards,
 Solana Balance Reporter
-`, dateStr, hourStr, nextHourStr, exactTimestamp)
+`, dateStr, hourStr, nextHourStr, totalAddresses, successCount, failedCount, exactTimestamp)
 
 	// Read the CSV file content
 	csvContent, err := readFile(csvFilePath)

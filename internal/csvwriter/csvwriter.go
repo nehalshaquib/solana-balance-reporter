@@ -31,15 +31,21 @@ func New(csvDir string, logger *logger.Logger) (*CSVWriter, error) {
 	}, nil
 }
 
-// WriteBalances writes token balances to a CSV file
+// WriteBalances writes token balances to a CSV file with an auto-generated filename
 func (w *CSVWriter) WriteBalances(balances []*solana.TokenBalance) (string, error) {
+	// Create filename based on current time with seconds precision
+	now := time.Now().UTC()
+	filename := fmt.Sprintf("balance_%s.csv", now.Format("2006-01-02_15_04_05"))
+
+	return w.WriteBalancesWithFilename(balances, filename)
+}
+
+// WriteBalancesWithFilename writes token balances to a CSV file with the specified filename
+func (w *CSVWriter) WriteBalancesWithFilename(balances []*solana.TokenBalance, filename string) (string, error) {
 	if len(balances) == 0 {
 		return "", fmt.Errorf("no balances to write")
 	}
 
-	// Create filename based on current time with seconds precision
-	now := time.Now().UTC()
-	filename := fmt.Sprintf("balance_%s.csv", now.Format("2006-01-02_15_04_05"))
 	filepath := filepath.Join(w.csvDir, filename)
 
 	w.logger.Log(fmt.Sprintf("Writing %d balances to %s", len(balances), filepath))

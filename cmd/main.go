@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -14,6 +15,10 @@ import (
 	"github.com/nehalshaquib/solana-balance-reporter/internal/reader"
 	"github.com/nehalshaquib/solana-balance-reporter/internal/solana"
 )
+
+// Global variable to store current run timestamp
+var currentRunTimestamp string
+var timeFormatLock sync.Mutex
 
 func main() {
 	// Load configuration
@@ -82,6 +87,24 @@ func main() {
 	}
 }
 
+// getRunTimestamp generates a consistent timestamp for the current run
+func getRunTimestamp() string {
+	timeFormatLock.Lock()
+	defer timeFormatLock.Unlock()
+
+	if currentRunTimestamp == "" {
+		currentRunTimestamp = time.Now().UTC().Format("2006-01-02_15_04_05")
+	}
+	return currentRunTimestamp
+}
+
+// resetRunTimestamp clears the timestamp to prepare for the next run
+func resetRunTimestamp() {
+	timeFormatLock.Lock()
+	defer timeFormatLock.Unlock()
+	currentRunTimestamp = ""
+}
+
 // maskString masks sensitive data like API keys and tokens
 func maskString(input string) string {
 	if len(input) <= 10 {
@@ -101,7 +124,15 @@ func runFetchAndReport(
 	cfg *config.Config,
 	log *logger.Logger,
 ) {
-	log.Log("---------------------------------------------------------------------------------------------------------------------------")
+	// Reset the timestamp for a new run
+	resetRunTimestamp()
+
+	// Create a new log file for this iteration
+	if err := log.SetFilename(fmt.Sprintf("activity_%s.log", getRunTimestamp())); err != nil {
+		fmt.Printf("Failed to set log filename: %v\n", err)
+		return
+	}
+
 	log.Log("Starting balance fetch cycle")
 
 	// Read wallet addresses
@@ -128,19 +159,19 @@ func runFetchAndReport(
 		return
 	}
 
-	// Write balances to CSV
-	csvPath, err := csvWriter.WriteBalances(balances)
+	// Write balances to CSV with the same timestamp as the log file
+	csvFilename := fmt.Sprintf("balance_%s.csv", getRunTimestamp())
+	csvPath, err := csvWriter.WriteBalancesWithFilename(balances, csvFilename)
 	if err != nil {
 		log.LogError("Failed to write balances to CSV", err)
 		return
 	}
 
 	// Send email report
-	if err := mailClient.SendReport(csvPath); err != nil {
+	if err := mailClient.SendReport(csvPath, balances); err != nil {
 		log.LogError("Failed to send email report", err)
 		return
 	}
 
 	log.Log("Balance fetch cycle completed successfully")
-	log.Log("---------------------------------------------------------------------------------------------------------------------------")
 }
