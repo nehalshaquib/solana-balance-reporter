@@ -51,12 +51,20 @@ func (m *Mailer) SendReport(csvFilePath string) error {
 	m.logger.Log(fmt.Sprintf("Preparing to send email report with attachment %s to %d recipients",
 		csvFilePath, len(m.emailTo)))
 
+	// Get current exact timestamp
+	now := time.Now().UTC()
+	exactTimestamp := now.Format("2006-01-02 15:04:05 UTC")
+
 	// Extract the time information from the filename
 	filename := filepath.Base(csvFilePath)
 	timeStr := strings.TrimPrefix(strings.TrimSuffix(filename, ".csv"), "balance_")
-	t, err := time.Parse("2006-01-02_15", timeStr)
+	t, err := time.Parse("2006-01-02_15_04_05", timeStr)
 	if err != nil {
-		return fmt.Errorf("failed to parse time from filename: %w", err)
+		// Try the old format if new format fails
+		t, err = time.Parse("2006-01-02_15", timeStr)
+		if err != nil {
+			return fmt.Errorf("failed to parse time from filename: %w", err)
+		}
 	}
 
 	// Create formatted time strings for the email
@@ -72,9 +80,11 @@ Attached is the token balance report for %s, %s - %s UTC.
 
 This report contains wallet addresses and their JINGLE token balances.
 
+This report was generated at exactly: %s
+
 Best regards,
 Solana Balance Reporter
-`, dateStr, hourStr, nextHourStr)
+`, dateStr, hourStr, nextHourStr, exactTimestamp)
 
 	// Read the CSV file content
 	csvContent, err := readFile(csvFilePath)

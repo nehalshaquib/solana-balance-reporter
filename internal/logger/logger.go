@@ -39,9 +39,9 @@ func (l *Logger) rotateLogFile() error {
 		l.file.Close()
 	}
 
-	// Create filename based on current time
+	// Create filename based on current time with seconds precision
 	now := time.Now().UTC()
-	filename := fmt.Sprintf("activity_%s.log", now.Format("2006-01-02_15"))
+	filename := fmt.Sprintf("activity_%s.log", now.Format("2006-01-02_15_04_05"))
 	filepath := filepath.Join(l.logDir, filename)
 
 	// Open or create the log file
@@ -54,21 +54,18 @@ func (l *Logger) rotateLogFile() error {
 	return nil
 }
 
-// CheckRotation rotates the log file if the hour has changed
+// CheckRotation rotates the log file if needed
 func (l *Logger) CheckRotation() error {
-	now := time.Now().UTC()
-	currentHour := now.Format("2006-01-02_15")
-
-	// Extract current log filename
+	// If file is nil, create a new one
 	if l.file == nil {
 		return l.rotateLogFile()
 	}
 
-	filename := filepath.Base(l.file.Name())
-	expectedPrefix := fmt.Sprintf("activity_%s", currentHour)
+	// We want to rotate logs every hour, check if we're at the start of an hour
+	now := time.Now().UTC()
 
-	// If filename doesn't match current hour, rotate
-	if len(filename) < len(expectedPrefix) || filename[:len(expectedPrefix)] != expectedPrefix {
+	// If we're within the first 10 seconds of an hour, rotate the log file
+	if now.Minute() == 0 && now.Second() < 10 {
 		return l.rotateLogFile()
 	}
 

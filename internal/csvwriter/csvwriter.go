@@ -37,9 +37,9 @@ func (w *CSVWriter) WriteBalances(balances []*solana.TokenBalance) (string, erro
 		return "", fmt.Errorf("no balances to write")
 	}
 
-	// Create hourly filename based on current time
+	// Create filename based on current time with seconds precision
 	now := time.Now().UTC()
-	filename := fmt.Sprintf("balance_%s.csv", now.Format("2006-01-02_15"))
+	filename := fmt.Sprintf("balance_%s.csv", now.Format("2006-01-02_15_04_05"))
 	filepath := filepath.Join(w.csvDir, filename)
 
 	w.logger.Log(fmt.Sprintf("Writing %d balances to %s", len(balances), filepath))
@@ -55,8 +55,8 @@ func (w *CSVWriter) WriteBalances(balances []*solana.TokenBalance) (string, erro
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
 
-	// Write header
-	if err := writer.Write([]string{"wallet_address", "timestamp", "balance"}); err != nil {
+	// Write header - removed timestamp column as requested
+	if err := writer.Write([]string{"wallet_address", "balance"}); err != nil {
 		return "", fmt.Errorf("failed to write CSV header: %w", err)
 	}
 
@@ -76,9 +76,9 @@ func (w *CSVWriter) WriteBalances(balances []*solana.TokenBalance) (string, erro
 			failedCount++
 		}
 
+		// Removed timestamp from the row
 		row := []string{
 			balance.WalletAddress,
-			balance.Timestamp.Format(time.RFC3339),
 			balanceStr,
 		}
 

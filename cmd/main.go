@@ -101,6 +101,7 @@ func runFetchAndReport(
 	cfg *config.Config,
 	log *logger.Logger,
 ) {
+	log.Log("---------------------------------------------------------------------------------------------------------------------------")
 	log.Log("Starting balance fetch cycle")
 
 	// Read wallet addresses
@@ -141,4 +142,5 @@ func runFetchAndReport(
 	}
 
 	log.Log("Balance fetch cycle completed successfully")
+	log.Log("---------------------------------------------------------------------------------------------------------------------------")
 }
