@@ -51,12 +51,20 @@ func (m *Mailer) SendReport(csvFilePath string) error {
 	m.logger.Log(fmt.Sprintf("Preparing to send email report with attachment %s to %d recipients",
 		csvFilePath, len(m.emailTo)))
 
+	// Get current exact timestamp
+	now := time.Now().UTC()
+	exactTimestamp := now.Format("2006-01-02 15:04:05 UTC")
+
 	// Extract the time information from the filename
 	filename := filepath.Base(csvFilePath)
 	timeStr := strings.TrimPrefix(strings.TrimSuffix(filename, ".csv"), "balance_")
-	t, err := time.Parse("2006-01-02_15", timeStr)
+	t, err := time.Parse("2006-01-02_15_04_05", timeStr)
 	if err != nil {
-		return fmt.Errorf("failed to parse time from filename: %w", err)
+		// Try the old format if new format fails
+		t, err = time.Parse("2006-01-02_15", timeStr)
+		if err != nil {
+			return fmt.Errorf("failed to parse time from filename: %w", err)
+		}
 	}
 
 	// Create formatted time strings for the email
@@ -70,11 +78,13 @@ func (m *Mailer) SendReport(csvFilePath string) error {
 
 Attached is the token balance report for %s, %s - %s UTC.
 
-This report contains wallet addresses and their token balances.
+This report contains wallet addresses and their JINGLE token balances.
+
+This report was generated at exactly: %s
 
 Best regards,
 Solana Balance Reporter
-`, dateStr, hourStr, nextHourStr)
+`, dateStr, hourStr, nextHourStr, exactTimestamp)
 
 	// Read the CSV file content
 	csvContent, err := readFile(csvFilePath)
@@ -123,16 +133,37 @@ Solana Balance Reporter
 
 // sendEmail sends the email using SMTP
 func (m *Mailer) sendEmail(mimeMsg []byte) error {
-	// Set up authentication
-	auth := smtp.PlainAuth("", m.smtpUsername, m.smtpPassword, m.smtpServer)
-
 	// Set up TLS config
 	tlsConfig := &tls.Config{
-		ServerName: m.smtpServer,
+		ServerName:         m.smtpServer,
+		InsecureSkipVerify: false, // Never skip verification in production
+		MinVersion:         tls.VersionTLS12,
 	}
 
 	// Connect to the SMTP server
 	addr := fmt.Sprintf("%s:%d", m.smtpServer, m.smtpPort)
+
+	// Try different email sending methods - sometimes AWS SES requires different approaches
+	err := m.sendWithStartTLS(addr, mimeMsg)
+	if err != nil {
+		m.logger.LogError("Failed to send using StartTLS, trying direct TLS", err)
+		err = m.sendWithDirectTLS(addr, tlsConfig, mimeMsg)
+	}
+
+	return err
+}
+
+// sendWithStartTLS attempts to send email using SMTP StartTLS
+func (m *Mailer) sendWithStartTLS(addr string, mimeMsg []byte) error {
+	// Set up authentication
+	auth := smtp.PlainAuth("", m.smtpUsername, m.smtpPassword, m.smtpServer)
+
+	return smtp.SendMail(addr, auth, m.emailFrom, m.emailTo, mimeMsg)
+}
+
+// sendWithDirectTLS attempts to send email using direct TLS connection
+func (m *Mailer) sendWithDirectTLS(addr string, tlsConfig *tls.Config, mimeMsg []byte) error {
+	// Connect to the SMTP server
 	conn, err := tls.Dial("tcp", addr, tlsConfig)
 	if err != nil {
 		return fmt.Errorf("failed to connect to SMTP server: %w", err)
@@ -144,6 +175,9 @@ func (m *Mailer) sendEmail(mimeMsg []byte) error {
 		return fmt.Errorf("failed to create SMTP client: %w", err)
 	}
 	defer client.Close()
+
+	// Set up authentication
+	auth := smtp.PlainAuth("", m.smtpUsername, m.smtpPassword, m.smtpServer)
 
 	// Authenticate
 	if err = client.Auth(auth); err != nil {

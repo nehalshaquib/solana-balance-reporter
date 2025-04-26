@@ -19,6 +19,7 @@ type TokenBalance struct {
 	WalletAddress string
 	Balance       float64
 	Timestamp     time.Time
+	FetchError    error // Track if there was an error fetching this balance
 }
 
 // Client represents a Solana RPC client
@@ -178,6 +179,7 @@ func (c *Client) FetchTokenBalance(ctx context.Context, walletAddress string) (*
 		WalletAddress: walletAddress,
 		Balance:       balance,
 		Timestamp:     time.Now().UTC(),
+		FetchError:    nil,
 	}, nil
 }
 
@@ -221,10 +223,19 @@ func (c *Client) FetchTokenBalances(addresses []string, concurrencyLimit int) ([
 		result := <-resultCh
 
 		if result.err != nil {
-			errors = append(errors, fmt.Errorf("error fetching balance for address index %d: %w",
-				result.index, result.err))
+			address := addresses[result.index]
+			errors = append(errors, fmt.Errorf("error fetching balance for address %s: %w",
+				address, result.err))
 			c.logger.LogError(fmt.Sprintf("Failed to fetch balance for address %s",
-				addresses[result.index]), result.err)
+				address), result.err)
+
+			// Add a placeholder with error for failed fetches
+			balances = append(balances, &TokenBalance{
+				WalletAddress: address,
+				Balance:       0,
+				Timestamp:     time.Now().UTC(),
+				FetchError:    result.err,
+			})
 		} else {
 			balances = append(balances, result.balance)
 
@@ -235,8 +246,19 @@ func (c *Client) FetchTokenBalances(addresses []string, concurrencyLimit int) ([
 		}
 	}
 
+	// Count successful and failed fetches
+	successCount := 0
+	failedCount := 0
+	for _, balance := range balances {
+		if balance.FetchError == nil {
+			successCount++
+		} else {
+			failedCount++
+		}
+	}
+
 	c.logger.Log(fmt.Sprintf("Completed fetching balances. Success: %d, Errors: %d",
-		len(balances), len(errors)))
+		successCount, failedCount))
 
 	return balances, errors
 }

@@ -37,9 +37,9 @@ func (w *CSVWriter) WriteBalances(balances []*solana.TokenBalance) (string, erro
 		return "", fmt.Errorf("no balances to write")
 	}
 
-	// Create hourly filename based on current time
+	// Create filename based on current time with seconds precision
 	now := time.Now().UTC()
-	filename := fmt.Sprintf("balance_%s.csv", now.Format("2006-01-02_15"))
+	filename := fmt.Sprintf("balance_%s.csv", now.Format("2006-01-02_15_04_05"))
 	filepath := filepath.Join(w.csvDir, filename)
 
 	w.logger.Log(fmt.Sprintf("Writing %d balances to %s", len(balances), filepath))
@@ -55,17 +55,31 @@ func (w *CSVWriter) WriteBalances(balances []*solana.TokenBalance) (string, erro
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
 
-	// Write header
-	if err := writer.Write([]string{"wallet_address", "timestamp", "balance"}); err != nil {
+	// Write header - removed timestamp column as requested
+	if err := writer.Write([]string{"wallet_address", "balance"}); err != nil {
 		return "", fmt.Errorf("failed to write CSV header: %w", err)
 	}
 
+	// Count of successful and failed entries
+	successCount := 0
+	failedCount := 0
+
 	// Write balance data
 	for _, balance := range balances {
+		balanceStr := "N/A"
+
+		// Only use numeric value if fetch was successful
+		if balance.FetchError == nil {
+			balanceStr = strconv.FormatFloat(balance.Balance, 'f', -1, 64)
+			successCount++
+		} else {
+			failedCount++
+		}
+
+		// Removed timestamp from the row
 		row := []string{
 			balance.WalletAddress,
-			balance.Timestamp.Format(time.RFC3339),
-			strconv.FormatFloat(balance.Balance, 'f', -1, 64),
+			balanceStr,
 		}
 
 		if err := writer.Write(row); err != nil {
@@ -73,6 +87,7 @@ func (w *CSVWriter) WriteBalances(balances []*solana.TokenBalance) (string, erro
 		}
 	}
 
-	w.logger.Log(fmt.Sprintf("Successfully wrote %d balances to %s", len(balances), filepath))
+	w.logger.Log(fmt.Sprintf("Successfully wrote %d balances to %s (Success: %d, Failed: %d)",
+		len(balances), filepath, successCount, failedCount))
 	return filepath, nil
 }
