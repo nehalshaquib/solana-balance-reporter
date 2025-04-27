@@ -87,7 +87,19 @@ func (m *Mailer) SendReport(csvFilePath string, balances []*solana.TokenBalance,
 	}
 
 	// Format subject with balance change info
-	subject := fmt.Sprintf("Token Balance Report for %s, %s - %s UTC", dateStr, hourStr, nextHourStr)
+	baseSubject := fmt.Sprintf("Token Balance Report for %s, %s - %s UTC", dateStr, hourStr, nextHourStr)
+
+	// Modify subject based on whether changes were detected
+	var subject string
+	if stats.SolanaChanges > 0 && stats.TokenChanges > 0 {
+		subject = fmt.Sprintf("SOL+TOKEN Change found: %s", baseSubject)
+	} else if stats.SolanaChanges > 0 {
+		subject = fmt.Sprintf("SOL Change found: %s", baseSubject)
+	} else if stats.TokenChanges > 0 {
+		subject = fmt.Sprintf("TOKEN Change found: %s", baseSubject)
+	} else {
+		subject = fmt.Sprintf("NO Change: %s", baseSubject)
+	}
 
 	// Add balance change information to the body
 	balanceChangesInfo := fmt.Sprintf("Balance changes detected:\n- SOL balance changes: %d addresses\n- Token balance changes: %d addresses\n",
