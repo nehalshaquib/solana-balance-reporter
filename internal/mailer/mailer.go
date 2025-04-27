@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nehalshaquib/solana-balance-reporter/internal/csvwriter"
 	"github.com/nehalshaquib/solana-balance-reporter/internal/logger"
 	"github.com/nehalshaquib/solana-balance-reporter/internal/solana"
 )
@@ -44,7 +45,7 @@ func New(smtpServer string, smtpPort int, smtpUsername, smtpPassword, emailFrom 
 }
 
 // SendReport sends an email with the CSV report attached
-func (m *Mailer) SendReport(csvFilePath string, balances []*solana.TokenBalance) error {
+func (m *Mailer) SendReport(csvFilePath string, balances []*solana.TokenBalance, stats *csvwriter.ChangeStats) error {
 	if len(m.emailTo) == 0 {
 		return fmt.Errorf("no recipients configured")
 	}
@@ -70,41 +71,55 @@ func (m *Mailer) SendReport(csvFilePath string, balances []*solana.TokenBalance)
 
 	// Create formatted time strings for the email
 	dateStr := t.Format("2 January 2006")
-	hourStr := t.Format("15:00")
-	nextHourStr := t.Add(time.Hour).Format("15:00")
+	hourStr := t.Format("15:04")
+	nextHourStr := t.Add(time.Hour).Format("15:04")
 
-	// Count successful and failed fetches
-	totalAddresses := len(balances)
-	successCount := 0
-	failedCount := 0
+	// Total addresses
+	totalAddresses := stats.TotalAddresses
+	successCount := stats.SuccessfulFetches
 
-	for _, balance := range balances {
-		if balance.FetchError == nil {
-			successCount++
-		} else {
-			failedCount++
-		}
+	// Format previous run time if available
+	var previousRunInfo string
+	if !stats.LastRunTimestamp.IsZero() {
+		previousRunInfo = fmt.Sprintf("Previous report time: %s\n", stats.LastRunTimestamp.Format("2006-01-02 15:04:05 UTC"))
+	} else {
+		previousRunInfo = "This is the first report (no previous data available for comparison)\n"
 	}
 
-	// Format subject and body
+	// Format subject with balance change info
 	subject := fmt.Sprintf("Token Balance Report for %s, %s - %s UTC", dateStr, hourStr, nextHourStr)
+
+	// Add balance change information to the body
+	balanceChangesInfo := fmt.Sprintf("Balance changes detected:\n- SOL balance changes: %d addresses\n- Token balance changes: %d addresses\n",
+		stats.SolanaChanges, stats.TokenChanges)
+
+	// Format detailed fetch failure information
+	fetchFailureInfo := fmt.Sprintf(`Fetch results:
+- Successfully fetched both balances: %d
+- Failed to fetch Solana balance only: %d
+- Failed to fetch token balance only: %d
+- Failed to fetch both balances: %d
+- Failed addresses are marked as "N/A" in the balance column`,
+		successCount, stats.SolanaFetchFailed, stats.TokenFetchFailed, stats.BothFetchesFailed)
+
+	// Format body
 	body := fmt.Sprintf(`Hello,
 
 Attached is the token balance report for %s, %s - %s UTC.
 
 This report contains wallet addresses and their JINGLE token balances.
 
+%s
+Current report time: %s
+
+%s
 Summary:
 - Total addresses processed: %d
-- Successfully fetched: %d
-- Failed to fetch: %d
-- Failed addresses are marked as "N/A" in the balance column
-
-This report was generated at exactly: %s
+%s
 
 Best regards,
 Solana Balance Reporter
-`, dateStr, hourStr, nextHourStr, totalAddresses, successCount, failedCount, exactTimestamp)
+`, dateStr, hourStr, nextHourStr, previousRunInfo, exactTimestamp, balanceChangesInfo, totalAddresses, fetchFailureInfo)
 
 	// Read the CSV file content
 	csvContent, err := readFile(csvFilePath)

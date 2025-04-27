@@ -9,17 +9,25 @@ import (
 	"math"
 	"math/big"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/nehalshaquib/solana-balance-reporter/internal/logger"
 )
 
+const (
+	// LAMPORTS_PER_SOL is the number of lamports in one SOL
+	LAMPORTS_PER_SOL = 1000000000
+)
+
 // TokenBalance represents a token balance entry
 type TokenBalance struct {
 	WalletAddress string
-	Balance       float64
+	TokenBalance  float64
+	SolanaBalance float64
 	Timestamp     time.Time
-	FetchError    error // Track if there was an error fetching this balance
+	TokenError    error // Track if there was an error fetching token balance
+	SolanaError   error // Track if there was an error fetching SOL balance
 }
 
 // Client represents a Solana RPC client
@@ -44,8 +52,139 @@ func New(rpcURL, tokenMint string, timeout time.Duration, maxRetries int, logger
 	}
 }
 
+// isRetriableError checks if an error is retriable
+func isRetriableError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Check for network/timeout errors that can be retried
+	if strings.Contains(err.Error(), "timeout") ||
+		strings.Contains(err.Error(), "connection") ||
+		strings.Contains(err.Error(), "reset") ||
+		strings.Contains(err.Error(), "EOF") ||
+		strings.Contains(err.Error(), "broken pipe") {
+		return true
+	}
+
+	// Rate limit errors are also retriable
+	if strings.Contains(err.Error(), "rate") && strings.Contains(err.Error(), "limit") {
+		return true
+	}
+
+	// Check HTTP status codes from RPC responses
+	if strings.Contains(err.Error(), "429") || // Too Many Requests
+		strings.Contains(err.Error(), "502") || // Bad Gateway
+		strings.Contains(err.Error(), "503") || // Service Unavailable
+		strings.Contains(err.Error(), "504") { // Gateway Timeout
+		return true
+	}
+
+	return false
+}
+
+// FetchSolanaBalance fetches the native SOL balance for a wallet address
+func (c *Client) FetchSolanaBalance(ctx context.Context, walletAddress string) (float64, error) {
+	var resp *http.Response
+	var err error
+
+	// Prepare the JSON-RPC request for getBalance
+	requestBody := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "getBalance",
+		"params": []interface{}{
+			walletAddress,
+		},
+	}
+
+	requestJSON, err := json.Marshal(requestBody)
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	// Retry logic with exponential backoff
+	for attempt := 0; attempt <= c.maxRetries; attempt++ {
+		if attempt > 0 {
+			// Calculate exponential backoff
+			backoff := time.Duration(math.Pow(2, float64(attempt-1))) * c.retryDelay
+			c.logger.Log(fmt.Sprintf("Retrying SOL balance fetch for %s (attempt %d/%d) after %v",
+				walletAddress, attempt, c.maxRetries, backoff))
+
+			select {
+			case <-ctx.Done():
+				return 0, ctx.Err()
+			case <-time.After(backoff):
+				// Continue with retry
+			}
+		}
+
+		// Create a new request
+		req, err := http.NewRequestWithContext(ctx, "POST", c.rpcURL, bytes.NewBuffer(requestJSON))
+		if err != nil {
+			return 0, fmt.Errorf("failed to create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		// Send the request
+		resp, err = c.httpClient.Do(req)
+
+		// Check for non-retriable errors
+		if err != nil && !isRetriableError(err) {
+			return 0, fmt.Errorf("non-retriable error fetching SOL balance: %w", err)
+		}
+
+		if err == nil && resp.StatusCode == http.StatusOK {
+			break
+		}
+
+		if resp != nil {
+			resp.Body.Close()
+		}
+
+		// If this was the last attempt, return the error
+		if attempt == c.maxRetries {
+			if err != nil {
+				return 0, fmt.Errorf("failed to fetch SOL balance after %d attempts: %w", c.maxRetries+1, err)
+			}
+			return 0, fmt.Errorf("failed to fetch SOL balance after %d attempts: status code %d", c.maxRetries+1, resp.StatusCode)
+		}
+	}
+
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	// Parse the response
+	var response struct {
+		Result struct {
+			Value int64 `json:"value"` // lamports
+		} `json:"result"`
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+
+	if err := json.Unmarshal(body, &response); err != nil {
+		return 0, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	// Check for RPC error
+	if response.Error != nil {
+		return 0, fmt.Errorf("RPC error %d: %s", response.Error.Code, response.Error.Message)
+	}
+
+	// Convert lamports to SOL
+	solBalance := float64(response.Result.Value) / LAMPORTS_PER_SOL
+
+	return solBalance, nil
+}
+
 // FetchTokenBalance fetches the token balance for a wallet address
-func (c *Client) FetchTokenBalance(ctx context.Context, walletAddress string) (*TokenBalance, error) {
+func (c *Client) FetchTokenBalance(ctx context.Context, walletAddress string) (float64, error) {
 	var resp *http.Response
 	var err error
 
@@ -67,7 +206,7 @@ func (c *Client) FetchTokenBalance(ctx context.Context, walletAddress string) (*
 
 	requestJSON, err := json.Marshal(requestBody)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
+		return 0, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	// Retry logic with exponential backoff
@@ -75,12 +214,12 @@ func (c *Client) FetchTokenBalance(ctx context.Context, walletAddress string) (*
 		if attempt > 0 {
 			// Calculate exponential backoff
 			backoff := time.Duration(math.Pow(2, float64(attempt-1))) * c.retryDelay
-			c.logger.Log(fmt.Sprintf("Retrying fetch for %s (attempt %d/%d) after %v",
+			c.logger.Log(fmt.Sprintf("Retrying token balance fetch for %s (attempt %d/%d) after %v",
 				walletAddress, attempt, c.maxRetries, backoff))
 
 			select {
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return 0, ctx.Err()
 			case <-time.After(backoff):
 				// Continue with retry
 			}
@@ -89,7 +228,7 @@ func (c *Client) FetchTokenBalance(ctx context.Context, walletAddress string) (*
 		// Create a new request
 		req, err := http.NewRequestWithContext(ctx, "POST", c.rpcURL, bytes.NewBuffer(requestJSON))
 		if err != nil {
-			return nil, fmt.Errorf("failed to create request: %w", err)
+			return 0, fmt.Errorf("failed to create request: %w", err)
 		}
 		req.Header.Set("Content-Type", "application/json")
 
@@ -106,16 +245,16 @@ func (c *Client) FetchTokenBalance(ctx context.Context, walletAddress string) (*
 		// If this was the last attempt, return the error
 		if attempt == c.maxRetries {
 			if err != nil {
-				return nil, fmt.Errorf("failed to fetch token balance after %d attempts: %w", c.maxRetries+1, err)
+				return 0, fmt.Errorf("failed to fetch token balance after %d attempts: %w", c.maxRetries+1, err)
 			}
-			return nil, fmt.Errorf("failed to fetch token balance after %d attempts: status code %d", c.maxRetries+1, resp.StatusCode)
+			return 0, fmt.Errorf("failed to fetch token balance after %d attempts: status code %d", c.maxRetries+1, resp.StatusCode)
 		}
 	}
 
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return 0, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	// Parse the response
@@ -144,12 +283,12 @@ func (c *Client) FetchTokenBalance(ctx context.Context, walletAddress string) (*
 	}
 
 	if err := json.Unmarshal(body, &response); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+		return 0, fmt.Errorf("failed to parse response: %w", err)
 	}
 
 	// Check for RPC error
 	if response.Error != nil {
-		return nil, fmt.Errorf("RPC error %d: %s", response.Error.Code, response.Error.Message)
+		return 0, fmt.Errorf("RPC error %d: %s", response.Error.Code, response.Error.Message)
 	}
 
 	// Extract balance
@@ -175,12 +314,59 @@ func (c *Client) FetchTokenBalance(ctx context.Context, walletAddress string) (*
 	}
 	// When no accounts found, balance stays 0
 
-	return &TokenBalance{
+	return balance, nil
+}
+
+// FetchBalances fetches both SOL and token balances for a wallet address
+func (c *Client) FetchBalances(ctx context.Context, walletAddress string) (*TokenBalance, error) {
+	// Create channels for the results
+	solChan := make(chan struct {
+		balance float64
+		err     error
+	})
+	tokenChan := make(chan struct {
+		balance float64
+		err     error
+	})
+
+	// Fetch SOL balance
+	go func() {
+		balance, err := c.FetchSolanaBalance(ctx, walletAddress)
+		solChan <- struct {
+			balance float64
+			err     error
+		}{balance, err}
+	}()
+
+	// Fetch token balance
+	go func() {
+		balance, err := c.FetchTokenBalance(ctx, walletAddress)
+		tokenChan <- struct {
+			balance float64
+			err     error
+		}{balance, err}
+	}()
+
+	// Wait for both results
+	solResult := <-solChan
+	tokenResult := <-tokenChan
+
+	// Create the result
+	result := &TokenBalance{
 		WalletAddress: walletAddress,
-		Balance:       balance,
+		TokenBalance:  tokenResult.balance,
+		SolanaBalance: solResult.balance,
 		Timestamp:     time.Now().UTC(),
-		FetchError:    nil,
-	}, nil
+		TokenError:    tokenResult.err,
+		SolanaError:   solResult.err,
+	}
+
+	// If both failed, return an error
+	if solResult.err != nil && tokenResult.err != nil {
+		return result, fmt.Errorf("failed to fetch balances: SOL error: %v, token error: %v", solResult.err, tokenResult.err)
+	}
+
+	return result, nil
 }
 
 // FetchTokenBalances fetches token balances for multiple wallet addresses concurrently
@@ -209,7 +395,7 @@ func (c *Client) FetchTokenBalances(addresses []string, concurrencyLimit int) ([
 		go func(i int, address string) {
 			defer func() { <-sem }() // Release semaphore
 
-			balance, err := c.FetchTokenBalance(ctx, address)
+			balance, err := c.FetchBalances(ctx, address)
 			resultCh <- struct {
 				balance *TokenBalance
 				err     error
@@ -228,37 +414,40 @@ func (c *Client) FetchTokenBalances(addresses []string, concurrencyLimit int) ([
 				address, result.err))
 			c.logger.LogError(fmt.Sprintf("Failed to fetch balance for address %s",
 				address), result.err)
+		}
 
-			// Add a placeholder with error for failed fetches
-			balances = append(balances, &TokenBalance{
-				WalletAddress: address,
-				Balance:       0,
-				Timestamp:     time.Now().UTC(),
-				FetchError:    result.err,
-			})
-		} else {
-			balances = append(balances, result.balance)
+		// Always add the balance record, even if there was an error
+		// The balance will have error fields set if fetching failed
+		balances = append(balances, result.balance)
 
-			// Log every 50 successful fetches
-			if len(balances)%50 == 0 {
-				c.logger.Log(fmt.Sprintf("Fetched %d/%d balances", len(balances), len(addresses)))
-			}
+		// Log every 50 fetches
+		if (i+1)%50 == 0 {
+			c.logger.Log(fmt.Sprintf("Fetched %d/%d balances", i+1, len(addresses)))
 		}
 	}
 
-	// Count successful and failed fetches
-	successCount := 0
-	failedCount := 0
+	// Count successful and failed fetches for SOL and token
+	successSol := 0
+	failedSol := 0
+	successToken := 0
+	failedToken := 0
+
 	for _, balance := range balances {
-		if balance.FetchError == nil {
-			successCount++
+		if balance.SolanaError == nil {
+			successSol++
 		} else {
-			failedCount++
+			failedSol++
+		}
+
+		if balance.TokenError == nil {
+			successToken++
+		} else {
+			failedToken++
 		}
 	}
 
-	c.logger.Log(fmt.Sprintf("Completed fetching balances. Success: %d, Errors: %d",
-		successCount, failedCount))
+	c.logger.Log(fmt.Sprintf("Completed fetching balances. SOL: (Success: %d, Errors: %d), Token: (Success: %d, Errors: %d)",
+		successSol, failedSol, successToken, failedToken))
 
 	return balances, errors
 }

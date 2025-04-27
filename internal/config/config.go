@@ -26,6 +26,7 @@ type Config struct {
 	AddressesFilePath    string
 	CSVDirPath           string
 	LogsDirPath          string
+	DatabasePath         string
 }
 
 // LoadConfig loads configuration from environment variables
@@ -37,6 +38,12 @@ func LoadConfig() (*Config, error) {
 	addressesPath := "addresses.txt"
 	csvDirPath := "csv"
 	logsDirPath := "logs"
+	databasePath := "data/balances.db"
+
+	// Custom database path from environment
+	if val, exists := os.LookupEnv("DATABASE_PATH"); exists && val != "" {
+		databasePath = val
+	}
 
 	// Parse fetch interval with a default of 60 minutes
 	fetchInterval := 60
@@ -104,5 +111,6 @@ func LoadConfig() (*Config, error) {
 		AddressesFilePath:    addressesPath,
 		CSVDirPath:           csvDirPath,
 		LogsDirPath:          logsDirPath,
+		DatabasePath:         databasePath,
 	}, nil
 }

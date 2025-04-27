@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/nehalshaquib/solana-balance-reporter/internal/config"
 	"github.com/nehalshaquib/solana-balance-reporter/internal/csvwriter"
+	"github.com/nehalshaquib/solana-balance-reporter/internal/database"
 	"github.com/nehalshaquib/solana-balance-reporter/internal/logger"
 	"github.com/nehalshaquib/solana-balance-reporter/internal/mailer"
 	"github.com/nehalshaquib/solana-balance-reporter/internal/reader"
@@ -19,6 +21,10 @@ import (
 // Global variable to store current run timestamp
 var currentRunTimestamp string
 var timeFormatLock sync.Mutex
+
+// iterationLock ensures only one iteration runs at a time
+var iterationLock sync.Mutex
+var isIterationRunning bool
 
 func main() {
 	// Load configuration
@@ -45,10 +51,19 @@ func main() {
 	log.Log(fmt.Sprintf("Performance settings - Timeout: %v, Max Retries: %d, Concurrency: %d",
 		cfg.RPCTimeout, cfg.MaxRetries, cfg.ConcurrencyLimit))
 
+	// Initialize database
+	db, err := database.New(cfg.DatabasePath)
+	if err != nil {
+		log.LogError("Failed to initialize database", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+	log.Log(fmt.Sprintf("Database initialized at %s", cfg.DatabasePath))
+
 	// Initialize components
 	addressReader := reader.New(cfg.AddressesFilePath, log)
 	solanaClient := solana.New(cfg.SolanaRPCURL, cfg.TokenMintAddress, cfg.RPCTimeout, cfg.MaxRetries, log)
-	csvWriter, err := csvwriter.New(cfg.CSVDirPath, log)
+	csvWriter, err := csvwriter.New(cfg.CSVDirPath, log, db)
 	if err != nil {
 		log.LogError("Failed to initialize CSV writer", err)
 		os.Exit(1)
@@ -72,14 +87,22 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// Run once immediately
+	// Run once immediately (blocks until completed)
 	runFetchAndReport(addressReader, solanaClient, csvWriter, mailClient, cfg, log)
 
 	// Main loop
 	for {
 		select {
 		case <-ticker.C:
-			runFetchAndReport(addressReader, solanaClient, csvWriter, mailClient, cfg, log)
+			// Check if an iteration is already running
+			if !isIterationRunning {
+				// Launch in a goroutine to avoid blocking the select
+				go func() {
+					runFetchAndReport(addressReader, solanaClient, csvWriter, mailClient, cfg, log)
+				}()
+			} else {
+				log.Log("Skipping scheduled run because previous iteration is still running")
+			}
 		case sig := <-sigChan:
 			log.Log(fmt.Sprintf("Received signal %s, shutting down...", sig))
 			return
@@ -124,16 +147,35 @@ func runFetchAndReport(
 	cfg *config.Config,
 	log *logger.Logger,
 ) {
+	// Lock the iteration to prevent overlap
+	iterationLock.Lock()
+	defer iterationLock.Unlock()
+
+	// Mark that an iteration is running
+	isIterationRunning = true
+	defer func() {
+		isIterationRunning = false
+	}()
+
 	// Reset the timestamp for a new run
 	resetRunTimestamp()
 
-	// Create a new log file for this iteration
-	if err := log.SetFilename(fmt.Sprintf("activity_%s.log", getRunTimestamp())); err != nil {
+	// Create a timestamp for this run - this ensures we use the same timestamp
+	// for logs and CSV files throughout this iteration
+	runTimestamp := getRunTimestamp()
+
+	// Set up a dedicated log file for this iteration - just once at the beginning
+	logFilename := fmt.Sprintf("activity_%s.log", runTimestamp)
+	if err := log.SetFilename(logFilename); err != nil {
 		fmt.Printf("Failed to set log filename: %v\n", err)
 		return
 	}
 
 	log.Log("Starting balance fetch cycle")
+
+	// Create a context with timeout for the entire operation
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.FetchIntervalMinutes)*time.Minute)
+	defer cancel()
 
 	// Read wallet addresses
 	addresses, err := addressReader.ReadAddresses()
@@ -142,7 +184,13 @@ func runFetchAndReport(
 		return
 	}
 
-	// Fetch token balances
+	// Check if context is still valid
+	if ctx.Err() != nil {
+		log.LogError("Operation cancelled", ctx.Err())
+		return
+	}
+
+	// Fetch token balances with context
 	balances, errors := solanaClient.FetchTokenBalances(addresses, cfg.ConcurrencyLimit)
 
 	// Log errors
@@ -159,16 +207,39 @@ func runFetchAndReport(
 		return
 	}
 
+	// Check if context is still valid
+	if ctx.Err() != nil {
+		log.LogError("Operation cancelled", ctx.Err())
+		return
+	}
+
 	// Write balances to CSV with the same timestamp as the log file
-	csvFilename := fmt.Sprintf("balance_%s.csv", getRunTimestamp())
+	csvFilename := fmt.Sprintf("balance_%s.csv", runTimestamp)
 	csvPath, err := csvWriter.WriteBalancesWithFilename(balances, csvFilename)
 	if err != nil {
 		log.LogError("Failed to write balances to CSV", err)
 		return
 	}
 
-	// Send email report
-	if err := mailClient.SendReport(csvPath, balances); err != nil {
+	// Get change statistics for the email
+	stats, err := csvWriter.GetChangeStats(balances)
+	if err != nil {
+		log.LogError("Failed to get change statistics", err)
+		// Continue with nil stats if we failed
+		stats = &csvwriter.ChangeStats{
+			CurrentTimestamp: time.Now().UTC(),
+			TotalAddresses:   len(balances),
+		}
+	}
+
+	// Check if context is still valid
+	if ctx.Err() != nil {
+		log.LogError("Operation cancelled", ctx.Err())
+		return
+	}
+
+	// Send email report with change statistics
+	if err := mailClient.SendReport(csvPath, balances, stats); err != nil {
 		log.LogError("Failed to send email report", err)
 		return
 	}

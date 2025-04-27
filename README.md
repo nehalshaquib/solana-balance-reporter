@@ -138,6 +138,35 @@ For addresses that fail to fetch:
 - Check the logs for the specific error message for each address
 - The application will attempt to retry fetches up to the configured MAX_RETRIES limit
 
+## Database Storage
+
+The application uses SQLite to store balance history. The database file is stored in the `data` directory by default. 
+
+### Dependencies
+
+When running locally (not via Docker), you need SQLite development packages installed:
+
+- **For Ubuntu/Debian**: `sudo apt-get install gcc libsqlite3-dev`
+- **For CentOS/RHEL**: `sudo yum install gcc sqlite-devel`
+- **For macOS**: `brew install sqlite3`
+- **For Windows**: Install MinGW/GCC and SQLite development libraries
+
+Make sure to build with CGO enabled:
+
+```sh
+CGO_ENABLED=1 go build -o solana-balance-reporter ./cmd
+```
+
+### Docker
+
+When using Docker, all necessary dependencies are included in the Dockerfile. The database file will be stored in the `data` directory, which is mounted as a volume in the Docker container.
+
+To start the service using Docker:
+
+```sh
+docker-compose up -d
+```
+
 ## License
 
 MIT License 

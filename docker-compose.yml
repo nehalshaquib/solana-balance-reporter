@@ -8,6 +8,7 @@ services:
     volumes:
       - ./csv:/app/csv
       - ./logs:/app/logs
+      - ./data:/app/data
       - ./.env:/app/.env
       - ./addresses.txt:/app/addresses.txt
     environment:
