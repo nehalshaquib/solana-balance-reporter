@@ -408,17 +408,33 @@ func (c *Client) FetchTokenBalances(addresses []string, concurrencyLimit int) ([
 	for i := 0; i < len(addresses); i++ {
 		result := <-resultCh
 
-		if result.err != nil {
-			address := addresses[result.index]
-			errors = append(errors, fmt.Errorf("error fetching balance for address %s: %w",
-				address, result.err))
-			c.logger.LogError(fmt.Sprintf("Failed to fetch balance for address %s",
-				address), result.err)
-		}
-
 		// Always add the balance record, even if there was an error
 		// The balance will have error fields set if fetching failed
 		balances = append(balances, result.balance)
+
+		// Log more detailed errors for each failed address
+		address := addresses[result.index]
+		balance := result.balance
+
+		if balance.SolanaError != nil {
+			errorMsg := fmt.Sprintf("Fetch error: error fetching SOL balance for address %s: %v",
+				address, balance.SolanaError)
+			c.logger.Log(errorMsg)
+			errors = append(errors, fmt.Errorf(errorMsg))
+		}
+
+		if balance.TokenError != nil {
+			errorMsg := fmt.Sprintf("Fetch error: error fetching token balance for address %s: %v",
+				address, balance.TokenError)
+			c.logger.Log(errorMsg)
+			errors = append(errors, fmt.Errorf(errorMsg))
+		}
+
+		// Original error aggregation (for compatibility)
+		if result.err != nil {
+			errors = append(errors, fmt.Errorf("error fetching balance for address %s: %w",
+				address, result.err))
+		}
 
 		// Log every 50 fetches
 		if (i+1)%50 == 0 {
